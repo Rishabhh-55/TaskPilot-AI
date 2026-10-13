@@ -166,6 +166,60 @@ class Verifier:
                 "already_processed": output.get("already_processed", False),
                 "trace": trace,
             })
+            # Verify that list_invoices actually contains
+            # the company requested in the processing step.
+            list_step = next(
+                (
+                    step for step in expected_steps
+                    if isinstance(step, dict)
+                    and step.get("tool") == "list_invoices"
+                ),
+                None,
+            )
+
+            if list_step is not None:
+                list_result = next(
+                    (
+                        result for result in results
+                        if result.get("tool") == "list_invoices"
+                    ),
+                    None,
+                )
+
+                list_output = (
+                    list_result.get("result")
+                    if list_result is not None
+                    else None
+                )
+
+                if isinstance(list_output, dict):
+                    invoices = list_output.get("invoices", [])
+                else:
+                    invoices = list_output
+
+                if not isinstance(invoices, list):
+                    invoices = []
+
+                company_found = any(
+                    isinstance(item, dict)
+                    and isinstance(item.get("company"), str)
+                    and item["company"].strip().casefold()
+                    == requested_company.strip().casefold()
+                    for item in invoices
+                )
+
+                semantic_checks.append({
+                    "check": (
+                        "Invoice listing contains the requested company"
+                    ),
+                    "passed": (
+                        list_result is not None
+                        and step_succeeded(list_result)
+                        and company_found
+                    ),
+                    "requested_company": requested_company,
+                    "company_found": company_found,
+                })    
 
         else:
             # Preserve the original search/read verification behavior

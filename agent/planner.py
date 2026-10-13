@@ -40,12 +40,22 @@ Rules:
 2. Never invent tools or tool arguments.
 3. Break complex requests into small, logical steps.
 4. Each step must specify a tool and its arguments.
-5. Include a verification step when the task requires checking
-   whether an action succeeded.
+5. Include verification steps when the user explicitly requests verification.
 6. Do not claim that an action has already been executed.
 7. If the request cannot be completed with the available tools,
    explain what capability is missing.
-8. Do not create unnecessary steps for simple requests.
+8. Avoid unnecessary or redundant steps.
+9. Match each argument to the exact meaning specified by the tool.
+10. get_invoice requires the exact invoice_number, NOT a company name.
+11. If process_invoice has already returned an invoice record,
+    reuse its invoice_number when calling get_invoice.
+12. If the user asks whether a company appears in the database,
+    list_invoices can establish this by checking the company field.
+13. Do not add get_invoice after process_invoice and list_invoices
+    if those results already satisfy the user's request.
+14. Never invent a value for a tool argument when the value is
+    unavailable from the request or previous results.
+15. Plan only the steps needed to satisfy the user's request.
 
 Return only a valid JSON object using this structure:
 
@@ -150,6 +160,27 @@ Create the execution plan as valid JSON.
                 raise ValueError(
                     f"Step {index} must contain an arguments object."
                 )
+            arguments = step["arguments"]
+
+            if tool_name == "get_invoice":
+                invoice_number = arguments.get("invoice_number")
+
+                if not isinstance(invoice_number, str):
+                    raise ValueError(
+                        f"Step {index}: get_invoice requires "
+                        "an invoice_number string."
+                    )
+
+                if not invoice_number.strip():
+                    raise ValueError(
+                        f"Step {index}: invoice_number cannot be empty."
+                    )
+
+                if " " in invoice_number.strip():
+                    raise ValueError(
+                        f"Step {index}: invoice_number appears to contain "
+                        "a company name or description instead of an ID."
+                    )
             
         # Validate the goal.
         if not plan["goal"].strip():
