@@ -18,13 +18,12 @@ class Executor:
         value: Any,
         previous_results: list[dict],
     ) -> Any:
-        """Resolve references to results from earlier execution steps."""
+        """Resolve references to earlier execution results."""
 
         if not isinstance(value, str):
             return value
 
-        # Support the placeholder Gemini generated:
-        # {{step_1.results[0].path}}
+        # Format 1: {{step_1.results[0].path}}
         match = re.fullmatch(
             r"\{\{\s*step_(\d+)\.results\[(\d+)\]\.([a-zA-Z_]\w*)\s*\}\}",
             value,
@@ -35,42 +34,113 @@ class Executor:
             result_index = int(match.group(2))
             field_name = match.group(3)
 
-            if step_number < 1 or step_number > len(previous_results):
+            if not 1 <= step_number <= len(previous_results):
                 raise ValueError(
-                    f"Cannot resolve '{value}': referenced step "
-                    "has not executed successfully."
+                    f"Cannot resolve '{value}': referenced step is unavailable."
                 )
 
-            step_result = previous_results[step_number - 1]
+            previous = previous_results[step_number - 1]
 
-            if not step_result.get("success"):
+            if not previous.get("success"):
                 raise ValueError(
                     f"Cannot resolve '{value}': referenced step failed."
                 )
 
-            tool_result = step_result.get("result")
+            result = previous.get("result")
 
-            if not isinstance(tool_result, list):
+            if not isinstance(result, list) or result_index >= len(result):
                 raise ValueError(
-                    f"Cannot resolve '{value}': previous result "
-                    "is not a list."
+                    f"Cannot resolve '{value}': result index is unavailable."
                 )
 
-            if result_index >= len(tool_result):
-                raise ValueError(
-                    f"Cannot resolve '{value}': result index "
-                    "is out of range."
-                )
-
-            item = tool_result[result_index]
+            item = result[result_index]
 
             if not isinstance(item, dict) or field_name not in item:
                 raise ValueError(
-                    f"Cannot resolve '{value}': field "
-                    f"'{field_name}' was not found."
+                    f"Cannot resolve '{value}': field '{field_name}' is unavailable."
                 )
 
             return item[field_name]
+
+        # Format 2: {{PREVIOUS_STEP_RESULT.files[0].path}}
+        match = re.fullmatch(
+            r"\{\{\s*PREVIOUS_STEP_RESULT\.files\[(\d+)\]\.([a-zA-Z_]\w*)\s*\}\}",
+            value,
+            re.IGNORECASE,
+        )
+
+        if match:
+            result_index = int(match.group(1))
+            field_name = match.group(2)
+
+            successful_searches = [
+                item
+                for item in previous_results
+                if item.get("success") is True
+                and item.get("tool") == "search_files"
+            ]
+
+            if not successful_searches:
+                raise ValueError(
+                    "Cannot resolve placeholder: no successful file search exists."
+                )
+
+            search_result = successful_searches[-1].get("result")
+
+            if not isinstance(search_result, list):
+                raise ValueError("The previous search result is not a list.")
+
+            if result_index >= len(search_result):
+                raise ValueError("The requested search result does not exist.")
+
+            item = search_result[result_index]
+
+            if not isinstance(item, dict) or field_name not in item:
+                raise ValueError(
+                    f"Search result does not contain field '{field_name}'."
+                )
+
+            return item[field_name]
+
+        # Support the older generic placeholder format.
+        if (
+            value.startswith("<")
+            and value.endswith(">")
+            and ("search" in value.lower() or "result" in value.lower())
+        ):
+            successful_searches = [
+                item
+                for item in previous_results
+                if item.get("success") is True
+                and item.get("tool") == "search_files"
+            ]
+
+            if not successful_searches:
+                raise ValueError("No successful search result is available.")
+
+            search_result = successful_searches[-1].get("result")
+
+            if not isinstance(search_result, list) or not search_result:
+                raise ValueError("The previous search returned no results.")
+
+            best_match = max(
+                (
+                    item for item in search_result
+                    if isinstance(item, dict) and item.get("path")
+                ),
+                key=lambda item: (
+                    item.get("match_ratio", 0),
+                    item.get("match_count", 0),
+                ),
+                default=None,
+            )
+
+            if best_match is None:
+                raise ValueError("The search result has no valid path.")
+
+            return best_match["path"]
+
+        return value
 
         # Preserve support for the older generic placeholder format.
         if (
