@@ -1,7 +1,10 @@
+import re
 from typing import Any, Callable
 
 
 class Executor:
+    """Executes validated tool calls and resolves previous-step results."""
+
     def __init__(
         self,
         tools: dict[str, Callable],
@@ -9,6 +12,111 @@ class Executor:
     ):
         self.tools = tools
         self.tool_schemas = tool_schemas or {}
+
+    def _resolve_placeholders(
+        self,
+        value: Any,
+        previous_results: list[dict],
+    ) -> Any:
+        """Resolve references to results from earlier execution steps."""
+
+        if not isinstance(value, str):
+            return value
+
+        # Support the placeholder Gemini generated:
+        # {{step_1.results[0].path}}
+        match = re.fullmatch(
+            r"\{\{\s*step_(\d+)\.results\[(\d+)\]\.([a-zA-Z_]\w*)\s*\}\}",
+            value,
+        )
+
+        if match:
+            step_number = int(match.group(1))
+            result_index = int(match.group(2))
+            field_name = match.group(3)
+
+            if step_number < 1 or step_number > len(previous_results):
+                raise ValueError(
+                    f"Cannot resolve '{value}': referenced step "
+                    "has not executed successfully."
+                )
+
+            step_result = previous_results[step_number - 1]
+
+            if not step_result.get("success"):
+                raise ValueError(
+                    f"Cannot resolve '{value}': referenced step failed."
+                )
+
+            tool_result = step_result.get("result")
+
+            if not isinstance(tool_result, list):
+                raise ValueError(
+                    f"Cannot resolve '{value}': previous result "
+                    "is not a list."
+                )
+
+            if result_index >= len(tool_result):
+                raise ValueError(
+                    f"Cannot resolve '{value}': result index "
+                    "is out of range."
+                )
+
+            item = tool_result[result_index]
+
+            if not isinstance(item, dict) or field_name not in item:
+                raise ValueError(
+                    f"Cannot resolve '{value}': field "
+                    f"'{field_name}' was not found."
+                )
+
+            return item[field_name]
+
+        # Preserve support for the older generic placeholder format.
+        if (
+            value.startswith("<")
+            and value.endswith(">")
+            and (
+                "search" in value.lower()
+                or "result" in value.lower()
+            )
+        ):
+            searches = [
+                result
+                for result in previous_results
+                if result.get("success") is True
+                and result.get("tool") == "search_files"
+            ]
+
+            if not searches:
+                raise ValueError(
+                    "Cannot resolve placeholder: "
+                    "no successful search result is available."
+                )
+
+            search_results = searches[-1].get("result")
+
+            if not isinstance(search_results, list) or not search_results:
+                raise ValueError("The previous search returned no results.")
+
+            best_match = max(
+                (
+                    item for item in search_results
+                    if isinstance(item, dict) and item.get("path")
+                ),
+                key=lambda item: (
+                    item.get("match_ratio", 0),
+                    item.get("match_count", 0),
+                ),
+                default=None,
+            )
+
+            if best_match is None:
+                raise ValueError("The search result has no valid path.")
+
+            return best_match["path"]
+
+        return value
 
     def execute_step(
         self,
@@ -27,7 +135,6 @@ class Executor:
         tool_name = step.get("tool")
         arguments = step.get("arguments")
 
-        # Validate tool name.
         if not isinstance(tool_name, str) or tool_name not in self.tools:
             return {
                 "success": False,
@@ -35,7 +142,6 @@ class Executor:
                 "error": f"Unknown tool: {tool_name!r}",
             }
 
-        # Validate argument structure.
         if not isinstance(arguments, dict):
             return {
                 "success": False,
@@ -45,83 +151,26 @@ class Executor:
 
         arguments = arguments.copy()
 
-        # Resolve file-path placeholders using earlier search results.
-        for key, value in list(arguments.items()):
-            if not isinstance(value, str):
-                continue
+        try:
+            arguments = {
+                key: self._resolve_placeholders(value, previous_results)
+                for key, value in arguments.items()
+            }
+        except (ValueError, TypeError, IndexError) as exc:
+            return {
+                "success": False,
+                "tool": tool_name,
+                "error": str(exc),
+            }
 
-            if not (
-                value.startswith("<")
-                and value.endswith(">")
-                and (
-                    "search" in value.lower()
-                    or "result" in value.lower()
-                )
-            ):
-                continue
-
-            successful_searches = [
-                result
-                for result in previous_results
-                if result.get("success") is True
-                and result.get("tool") == "search_files"
-            ]
-
-            if not successful_searches:
-                return {
-                    "success": False,
-                    "tool": tool_name,
-                    "error": (
-                        f"Cannot resolve '{key}': "
-                        "no successful search result is available."
-                    ),
-                }
-
-            search_results = successful_searches[-1].get("result")
-
-            if not isinstance(search_results, list) or not search_results:
-                return {
-                    "success": False,
-                    "tool": tool_name,
-                    "error": "The previous search returned no results.",
-                }
-
-            ranked_results = sorted(
-                search_results,
-                key=lambda item: (
-                    item.get("match_ratio", 0),
-                    item.get("match_count", 0),
-                ) if isinstance(item, dict) else (0, 0),
-                reverse=True,
-            )
-
-            best_match = ranked_results[0]
-
-            if not isinstance(best_match, dict) or not best_match.get("path"):
-                return {
-                    "success": False,
-                    "tool": tool_name,
-                    "error": "The best search result has no valid path.",
-                }
-
-            arguments[key] = best_match["path"]
-
-        # Validate required and allowed arguments.
         schema = self.tool_schemas.get(tool_name)
 
         if schema:
             required = schema.get("required", [])
             allowed = schema.get("allowed", [])
 
-            missing = [
-                key for key in required
-                if key not in arguments
-            ]
-
-            unexpected = [
-                key for key in arguments
-                if key not in allowed
-            ]
+            missing = [key for key in required if key not in arguments]
+            unexpected = [key for key in arguments if key not in allowed]
 
             if missing:
                 return {
@@ -137,12 +186,9 @@ class Executor:
                     "error": f"Unexpected arguments: {unexpected}",
                 }
 
-        # Execute the tool.
-                # Execute the tool.
         try:
             result = self.tools[tool_name](**arguments)
 
-            # Propagate failures returned by tools.
             if isinstance(result, dict) and result.get("success") is False:
                 return {
                     "success": False,
@@ -185,12 +231,8 @@ class Executor:
         results = []
 
         for step in steps:
-            result = self.execute_step(
-                step,
-                previous_results=results,
-            )
+            result = self.execute_step(step, previous_results=results)
 
-            # Retry a failed step once.
             if not result["success"]:
                 error_message = result.get("error", "").lower()
 
@@ -204,6 +246,8 @@ class Executor:
                     "access outside the documents directory is prohibited",
                     "document not found",
                     "search query cannot be empty",
+                    "cannot resolve",
+                    "result index is out of range",
                 ]
 
                 is_permanent_failure = any(
