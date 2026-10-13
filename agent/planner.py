@@ -47,15 +47,24 @@ Rules:
 8. Avoid unnecessary or redundant steps.
 9. Match each argument to the exact meaning specified by the tool.
 10. get_invoice requires the exact invoice_number, NOT a company name.
-11. If process_invoice has already returned an invoice record,
+11. Never pass a company name, such as "XYZ Corporation", as
+    the invoice_number argument to get_invoice.
+12. If the user provides a company name but no invoice number,
+    first use search_invoices or list_invoices to find matching
+    invoice records.
+13. Only call get_invoice after obtaining the exact invoice_number
+    from the user's request or a previous tool result.
+14. If no matching invoice is found, explain that no matching
+    invoice was found. Never invent an invoice number.
+15. If process_invoice has already returned an invoice record,
     reuse its invoice_number when calling get_invoice.
-12. If the user asks whether a company appears in the database,
+16. If the user asks whether a company appears in the database,
     list_invoices can establish this by checking the company field.
-13. Do not add get_invoice after process_invoice and list_invoices
+17. Do not add get_invoice after process_invoice and list_invoices
     if those results already satisfy the user's request.
-14. Never invent a value for a tool argument when the value is
+18. Never invent a value for a tool argument when the value is
     unavailable from the request or previous results.
-15. Plan only the steps needed to satisfy the user's request.
+19. Plan only the steps needed to satisfy the user's request.
 
 Return only a valid JSON object using this structure:
 
