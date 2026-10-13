@@ -1,0 +1,4 @@
+﻿Invoice Number: INV-1001
+Company: ABC Company
+Amount: 12500 INR
+Status: Unpaid

@@ -1,0 +1,4 @@
+Invoice Number: INV-2001
+Company: XYZ Corporation
+Amount: 8500 INR
+Status: Paid

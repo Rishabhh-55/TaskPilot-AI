@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Environment variables and secrets
+.env
+
+# Generated databases
+data/*.db
+
+# Test and coverage artifacts
+.coverage
+htmlcov/
+
+# Editor settings
+.vscode/
