@@ -5,13 +5,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Defaults preserve the existing local LM Studio setup.
 BASE_URL = os.getenv(
-    "LM_STUDIO_BASE_URL",
-    "http://127.0.0.1:1234/v1",
+    "LLM_BASE_URL",
+    os.getenv(
+        "LM_STUDIO_BASE_URL",
+        "http://127.0.0.1:1234/v1",
+    ),
 ).rstrip("/")
 
-API_KEY = os.getenv("LM_STUDIO_API_KEY", "lm-studio")
-MODEL = os.getenv("LM_STUDIO_MODEL", "local-model")
+API_KEY = os.getenv(
+    "LLM_API_KEY",
+    os.getenv("LM_STUDIO_API_KEY", "lm-studio"),
+)
+
+MODEL = os.getenv(
+    "LLM_MODEL",
+    os.getenv("LM_STUDIO_MODEL", "qwen/qwen3.5-9b"),
+)
 
 
 class LLMClient:
@@ -49,7 +60,7 @@ class LLMClient:
                 error_details = f" | Response: {exc.response.text}"
 
             raise RuntimeError(
-                f"Could not communicate with LM Studio: {exc}"
+                f"Could not communicate with the configured LLM endpoint: {exc}"
                 f"{error_details}"
             ) from exc
 
@@ -57,16 +68,19 @@ class LLMClient:
             result = response.json()
             message = result["choices"][0]["message"]
 
-            # Return the final answer when available.
             content = message.get("content")
 
-            # Fall back to reasoning only if the final answer is empty.
             if not content:
                 content = message.get("reasoning_content", "")
+
+            if not content:
+                raise RuntimeError(
+                    "The LLM returned an empty response."
+                )
 
             return content
 
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise RuntimeError(
-                "LM Studio returned an unexpected response."
+                "The LLM endpoint returned an unexpected response."
             ) from exc
