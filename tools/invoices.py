@@ -189,3 +189,33 @@ def list_invoices() -> dict:
             for invoice in invoices
         ],
     }
+def search_invoices(query: str) -> dict:
+    """Search saved invoices by invoice number or company name."""
+
+    initialize_database()
+
+    query = query.strip()
+
+    if not query:
+        raise ValueError("Search query cannot be empty.")
+
+    with get_connection() as connection:
+        invoices = connection.execute(
+            """
+            SELECT *
+            FROM invoices
+            WHERE invoice_number LIKE ?
+               OR company LIKE ?
+            ORDER BY id DESC
+            """,
+            (f"%{query}%", f"%{query}%"),
+        ).fetchall()
+
+    results = [dict(invoice) for invoice in invoices]
+
+    return {
+        "success": True,
+        "query": query,
+        "count": len(results),
+        "invoices": results,
+    }

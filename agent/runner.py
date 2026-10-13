@@ -1,12 +1,17 @@
 from agent.planner import Planner
 from agent.executor import Executor
 from agent.verifier import Verifier
-from tools.files import search_files, read_file
-from agent.workflow import process_invoice
+from tools.files import search_files, read_file, list_files
+from agent.workflow import (
+    process_invoice,
+    extract_invoice_data,
+    verify_invoice,
+)
 from tools.invoices import (
     create_invoice,
     get_invoice,
     list_invoices,
+    search_invoices,
 )
 
 AVAILABLE_TOOLS = [
@@ -70,6 +75,32 @@ AVAILABLE_TOOLS = [
             "company": "string"
         },
     },
+    {
+        "name": "list_files",
+        "description": "List supported documents in the documents directory.",
+        "arguments": {},
+    },
+    {
+        "name": "extract_invoice_data",
+        "description": "Extract invoice fields from document text.",
+        "arguments": {
+            "content": "string",
+        },
+    },
+    {
+        "name": "search_invoices",
+        "description": "Search saved invoices by invoice number or company name.",
+        "arguments": {
+            "query": "string",
+        },
+    },
+    {
+        "name": "verify_invoice",
+        "description": "Check whether an invoice exists in the database using its exact invoice number.",
+        "arguments": {
+            "invoice_number": "string",
+        },
+    },
 ]
 
 REGISTERED_TOOLS = {
@@ -79,6 +110,10 @@ REGISTERED_TOOLS = {
     "get_invoice": get_invoice,
     "list_invoices": list_invoices,
     "process_invoice": process_invoice,
+    "list_files": list_files,
+    "extract_invoice_data": extract_invoice_data,
+    "search_invoices": search_invoices,
+    "verify_invoice": verify_invoice,
 }
 
 class TaskPilotAgent:
@@ -123,9 +158,76 @@ class TaskPilotAgent:
                     "required": ["company"],
                     "allowed": ["company"],
                 },
+                "list_files": {
+                    "required": [],
+                    "allowed": [],
+                },
+                "extract_invoice_data": {
+                    "required": ["content"],
+                    "allowed": ["content"],
+                },
+                "search_invoices": {
+                    "required": ["query"],
+                    "allowed": ["query"],
+                },
+                "verify_invoice": {
+                    "required": ["invoice_number"],
+                    "allowed": ["invoice_number"],
+                },
             },
         )
         self.verifier = Verifier()
+
+    def plan(self, user_request: str) -> dict:
+        """Generate a plan without executing any tools."""
+        if not isinstance(user_request, str) or not user_request.strip():
+            raise ValueError("Please enter a task.")
+
+        plan = self.planner.create_plan(
+            user_request=user_request,
+            available_tools=AVAILABLE_TOOLS,
+        )
+
+        return {
+            "goal": plan.get("goal"),
+            "plan": plan,
+        }
+
+    def execute_approved_plan(self, plan: dict) -> dict:
+        """Execute a plan only after explicit user approval."""
+        if not isinstance(plan, dict):
+            raise ValueError("The approved plan must be a dictionary.")
+
+        if not isinstance(plan.get("steps"), list) or not plan["steps"]:
+            raise ValueError("The plan must contain at least one step.")
+
+        # Reject plans that use tools outside the registered tool list.
+        for step in plan["steps"]:
+            if (
+                not isinstance(step, dict)
+                or step.get("tool") not in REGISTERED_TOOLS
+                or not isinstance(step.get("arguments"), dict)
+            ):
+                raise ValueError("The plan contains an invalid tool step.")
+
+        results = self.executor.execute_plan(plan)
+
+        verification = self.verifier.verify_execution(
+            plan,
+            results,
+        )
+
+        return {
+            "goal": plan.get("goal"),
+            "plan": plan,
+            "results": results,
+            "verification": verification,
+        }
+
+    def run(self, user_request: str) -> dict:
+        """Compatibility method: plan and execute immediately."""
+        planned = self.plan(user_request)
+        return self.execute_approved_plan(planned["plan"])
 
     def run(self, user_request: str) -> dict:
         if not user_request.strip():

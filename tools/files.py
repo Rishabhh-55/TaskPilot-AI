@@ -81,3 +81,25 @@ def read_file(path: str) -> dict:
         "content": content,
         "characters": len(content),
     }
+def list_files() -> dict:
+    """List supported documents in the documents directory."""
+
+    DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    files = []
+
+    for path in DOCUMENTS_DIR.rglob("*"):
+        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
+            files.append({
+                "name": path.name,
+                "path": str(path.relative_to(DOCUMENTS_DIR)),
+                "extension": path.suffix.lower(),
+            })
+
+    files.sort(key=lambda item: item["path"].lower())
+
+    return {
+        "success": True,
+        "count": len(files),
+        "files": files,
+    }

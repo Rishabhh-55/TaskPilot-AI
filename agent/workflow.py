@@ -6,6 +6,35 @@ from agent.invoice_processor import (
     validate_invoice,
 )
 
+def extract_invoice_data(content: str) -> dict:
+    """Extract invoice fields from document content."""
+
+    extracted = extract_invoice_fields(content)
+
+    return {
+        "success": True,
+        "extracted": extracted,
+    }
+
+
+def verify_invoice(invoice_number: str) -> dict:
+    """Verify that an invoice exists in the database."""
+
+    result = get_invoice(invoice_number)
+
+    if not result.get("success"):
+        return {
+            "success": False,
+            "verified": False,
+            "message": result.get("message", "Invoice not found."),
+        }
+
+    return {
+        "success": True,
+        "verified": True,
+        "invoice": result["invoice"],
+        "message": "Invoice exists in the database.",
+    }
 
 def process_invoice(company: str) -> dict:
     """Find, extract, validate, save, and verify an invoice."""
