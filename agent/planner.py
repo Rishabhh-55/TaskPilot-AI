@@ -112,13 +112,52 @@ Create the execution plan as valid JSON.
     ) -> dict[str, Any]:
         """Parse and validate the plan returned by the LLM."""
 
+        if not isinstance(response, str) or not response.strip():
+            raise ValueError("The model returned an empty response.")
+
+        # First, try parsing the response exactly as returned.
         try:
             plan = json.loads(response)
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise ValueError(
-                "The model did not return valid JSON. "
-                "The plan cannot be executed safely."
-            ) from exc
+        except json.JSONDecodeError:
+            # Some models wrap JSON in Markdown code fences
+            # or add a short explanation around the JSON.
+            text = response.strip()
+
+            if text.startswith("```"):
+                lines = text.splitlines()
+
+                if lines and lines[0].startswith("```"):
+                    lines = lines[1:]
+
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+
+                text = "\n".join(lines).strip()
+
+                if text.lower().startswith("json"):
+                    text = text[4:].lstrip()
+
+            try:
+                plan = json.loads(text)
+            except json.JSONDecodeError:
+                # If there is surrounding text, extract the outermost
+                # JSON object and attempt to parse it.
+                start = text.find("{")
+                end = text.rfind("}")
+
+                if start == -1 or end <= start:
+                    raise ValueError(
+                        "The model did not return a valid JSON object. "
+                        "The plan cannot be executed safely."
+                    )
+
+                try:
+                    plan = json.loads(text[start:end + 1])
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        "The model did not return valid JSON. "
+                        "The plan cannot be executed safely."
+                    ) from exc
 
         if not isinstance(plan, dict):
             raise ValueError("The plan must be a JSON object.")
@@ -142,6 +181,12 @@ Create the execution plan as valid JSON.
             if isinstance(tool, dict)
         }
 
+        if not plan["goal"].strip():
+            raise ValueError("Plan goal cannot be empty.")
+
+        if not plan["success_criteria"]:
+            raise ValueError("Plan must include success criteria.")
+
         for index, step in enumerate(steps, start=1):
             if not isinstance(step, dict):
                 raise ValueError(
@@ -150,30 +195,31 @@ Create the execution plan as valid JSON.
 
             tool_name = step.get("tool")
 
-            if tool_name not in allowed_tools:
+            if not isinstance(tool_name, str) or tool_name not in allowed_tools:
                 raise ValueError(
                     f"Step {index} uses an unavailable tool: "
                     f"{tool_name!r}"
                 )
 
-            if not isinstance(step.get("arguments"), dict):
+            arguments = step.get("arguments")
+
+            if not isinstance(arguments, dict):
                 raise ValueError(
                     f"Step {index} must contain an arguments object."
                 )
-            arguments = step["arguments"]
+
+            if not isinstance(step.get("purpose"), str) or not step["purpose"].strip():
+                raise ValueError(
+                    f"Step {index} must specify a non-empty purpose."
+                )
 
             if tool_name == "get_invoice":
                 invoice_number = arguments.get("invoice_number")
 
-                if not isinstance(invoice_number, str):
+                if not isinstance(invoice_number, str) or not invoice_number.strip():
                     raise ValueError(
-                        f"Step {index}: get_invoice requires "
-                        "an invoice_number string."
-                    )
-
-                if not invoice_number.strip():
-                    raise ValueError(
-                        f"Step {index}: invoice_number cannot be empty."
+                        f"Step {index}: get_invoice requires a "
+                        "non-empty invoice_number string."
                     )
 
                 if " " in invoice_number.strip():
@@ -181,31 +227,5 @@ Create the execution plan as valid JSON.
                         f"Step {index}: invoice_number appears to contain "
                         "a company name or description instead of an ID."
                     )
-            
-        # Validate the goal.
-        if not plan["goal"].strip():
-            raise ValueError("Plan goal cannot be empty.")
 
-        # Validate success criteria.
-        if not plan["success_criteria"]:
-            raise ValueError("Plan must include success criteria.")
-
-        # Validate every step.
-        for index, step in enumerate(plan["steps"], start=1):
-            if not isinstance(step, dict):
-                raise ValueError(f"Step {index} must be a dictionary.")
-
-            if not isinstance(step.get("tool"), str):
-                raise ValueError(f"Step {index} must specify a tool.")
-
-            if not isinstance(step.get("arguments"), dict):
-                raise ValueError(
-                    f"Step {index} arguments must be a dictionary."
-                )
-
-            if not isinstance(step.get("purpose"), str):
-                raise ValueError(f"Step {index} must specify its purpose.")
-
-            if not step["purpose"].strip():
-                raise ValueError(f"Step {index} purpose cannot be empty.")
         return plan
